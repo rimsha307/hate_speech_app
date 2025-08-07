@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Hate Speech Detection</title>
+</head>
+<body>
+    <h1>Hate Speech Detection App</h1>
+    <form method="POST" action="/">
+        <label for="text">Enter a tweet:</label><br>
+        <textarea name="text" rows="5" cols="50"></textarea><br><br>
+        <input type="submit" value="Predict">
+    </form>
+    {% if prediction is not none %}
+        <h2>Prediction: {{ prediction }}</h2>
+    {% endif %}
+</body>
+</html>
