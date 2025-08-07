@@ -1,76 +1,107 @@
 import streamlit as st
+import pandas as pd
 import joblib
 import matplotlib.pyplot as plt
-from wordcloud import WordCloud
+from io import BytesIO
 
-# Load model and vectorizer
-model = joblib.load("model.pkl")
-vectorizer = joblib.load("vectorizer.pkl")
+import re
+import string
+from nltk.corpus import stopwords
+import nltk
 
-# Streamlit config
-st.set_page_config(page_title="Hate Speech Detector", layout="wide")
+# Download stopwords if not already downloaded
+nltk.download('stopwords')
+stop_words = set(stopwords.words('english'))
 
-# Load custom CSS
-with open("style.css") as f:
-    st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
+def preprocess_text(text):
+    text = text.lower()
+    text = re.sub(r"http\S+|www\S+|https\S+", '', text)  # Remove URLs
+    text = re.sub(r'\@\w+|\#','', text)  # Remove mentions and hashtags
+    text = re.sub(r'[%s]' % re.escape(string.punctuation), '', text)  # Remove punctuation
+    text = re.sub(r'\d+', '', text)  # Remove numbers
+    text = text.strip()
 
-# App title
-st.title("🧠 Hate Speech Classifier")
-st.write("Enter a sentence to check whether it's Hate/Offensive or Neutral.")
+    # Remove stopwords
+    tokens = text.split()
+    tokens = [word for word in tokens if word not in stop_words]
+    cleaned_text = ' '.join(tokens)
 
-# Track prediction counts
+    return cleaned_text
+
+
+# ----- APP CONFIG -----
+st.set_page_config(page_title="Hate Speech Classifier", layout="wide", page_icon="🧠")
+st.title("🧠 Hate Speech Detection App")
+
+# ----- LOAD MODEL -----
+model = joblib.load("model.pkl")  # Replace with your model file
+vectorizer = joblib.load("vectorizer.pkl")    # Replace with your vectorizer
+
+# ----- SESSION STATE FOR PIE CHART COUNTS -----
 if 'hate_count' not in st.session_state:
     st.session_state.hate_count = 0
-if 'neutral_count' not in st.session_state:
     st.session_state.neutral_count = 0
 
-# Input text box
-user_input = st.text_area("Enter Text:", height=150 , width = 300)
+# ----- INPUT + PIE CHART LAYOUT -----
+left_col, right_col = st.columns([2, 1])
 
-# Predict button
-if st.button("Predict"):
-    if user_input.strip() == "":
-        st.warning("Please enter some text.")
-    else:
-        # Vectorize and predict
-        text_vector = vectorizer.transform([user_input])
-        prediction = model.predict(text_vector)[0]
+with left_col:
+    user_input = st.text_area("Enter Text to Classify:", height=150)
 
-        # Display result and update counts
-        if prediction == 0:
-            st.session_state.hate_count += 1
-            st.error("⚠️ This text is classified as: **Hate/Offensive**")
+    if st.button("Predict"):
+        if user_input.strip() == "":
+            st.warning("⚠️ Please enter some text.")
         else:
-            st.session_state.neutral_count += 1
-            st.success("✅ This text is classified as: **Neutral**")
+            cleaned_text = preprocess_text(user_input)
+            text_vector = vectorizer.transform([cleaned_text])
+            prediction = model.predict(text_vector)[0]
 
-        # Visualization columns
-        st.markdown("---")
-        col1, col2 = st.columns(2)
+            if prediction == 0:
+                st.session_state.hate_count += 1
+                st.error("⚠️ This text is classified as: **Hate/Offensive**")
+            else:
+                st.session_state.neutral_count += 1
+                st.success("✅ This text is classified as: **Neutral**")
 
-        # ----- PIE CHART -----
-        with col1:
-            st.subheader("📊 Prediction Distribution")
-            labels = ['Hate/Offensive', 'Neutral']
-            sizes = [st.session_state.hate_count, st.session_state.neutral_count]
-            colors = ['#ff4b4b', '#4CAF50']
+with right_col:
+    if st.session_state.hate_count + st.session_state.neutral_count > 0:
+        st.subheader("📊 Prediction Distribution")
+        labels = ['Hate/Offensive', 'Neutral']
+        sizes = [st.session_state.hate_count, st.session_state.neutral_count]
+        colors = ['#ff4b4b', '#4CAF50']
 
-            fig, ax = plt.subplots(figsize=(1.5, 1.5), facecolor='black')
-            ax.pie(sizes, labels=labels, autopct='%1.1f%%', colors=colors, startangle=90)
-            ax.axis('equal')
-            st.pyplot(fig)
+        fig, ax = plt.subplots(figsize=(3, 3), facecolor='black')
+        ax.pie(sizes, labels=labels, autopct='%1.1f%%', colors=colors, startangle=90)
+        ax.axis('equal')
+        st.pyplot(fig)
 
-        # ----- WORD CLOUD -----
-        with col2:
-            st.subheader("🌥 Sample Word Cloud")
-            sample_text = """
-            hate speech offensive violence abuse slur racism sexism hate anger insult harassment 
-            neutral peaceful love unity respect tolerance helpful safe informative
-            """
-            wordcloud = WordCloud(width=400, height=300, background_color= 'black', colormap='Set2').generate(sample_text)
+# ----- SIDEBAR FOR CSV UPLOAD -----
+st.sidebar.header("📄 Batch Prediction")
+uploaded_file = st.sidebar.file_uploader("Upload a CSV File", type=['csv'])
 
-            fig_wc, ax_wc = plt.subplots(figsize=(3, 3))
-            ax_wc.imshow(wordcloud, interpolation='bilinear')
-            ax_wc.axis('off')
-            fig_wc.patch.set_facecolor('black')  # remove border
-            st.pyplot(fig_wc)
+if uploaded_file is not None:
+    try:
+        df = pd.read_csv(uploaded_file)
+        st.sidebar.success("✅ File uploaded successfully!")
+        st.sidebar.write("Preview:", df.head())
+
+        col_options = df.columns.tolist()
+        text_col = st.sidebar.selectbox("Select column with text", col_options)
+
+        if st.sidebar.button("Classify Batch"):
+            texts = df[text_col].astype(str)
+            cleaned_texts = texts.apply(preprocess_text)
+            vectors = vectorizer.transform(cleaned_texts)
+            preds = model.predict(vectors)
+            df['Prediction'] = preds
+            df['Prediction Label'] = df['Prediction'].map({0: 'Hate/Offensive', 1: 'Neutral'})
+            st.subheader("📋 Batch Predictions")
+            st.dataframe(df[[text_col, 'Prediction Label']])
+
+            # Download CSV
+            output = BytesIO()
+            df.to_csv(output, index=False)
+            st.download_button("📥 Download Predictions as CSV", data=output.getvalue(),
+                               file_name='predictions.csv', mime='text/csv')
+    except Exception as e:
+        st.sidebar.error(f"Error: {e}")
