@@ -1,5 +1,6 @@
 streamlit
 scikit-learn
 joblib
-matplotlib
-wordcloud
+pandas
+nltk
+
